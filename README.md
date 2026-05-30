@@ -1,5 +1,7 @@
 # 🌐 SocSim: Agent-Based Model of Cooperation & Competition
 
+![SocSim Simulation Dashboard](<SocSim.png>)
+
 ## Overview
 
 This project is an **Agent-Based Model (ABM)** simulation developed using vanilla JavaScript and HTML Canvas. It models a dynamic, complex society to investigate the stability, inequality, and resilience of different behavioral strategies (Cooperation, Competition, Defection, and Predation) under varying economic and political pressures.
