@@ -274,6 +274,11 @@ class Agent {
         this.avoidingNodeId = null; // Store ID of node being decided upon
         this.isAvoiding = false; // True if actively moving away
         this.raidTargetNodeId = null; // NEW: Tracks which raid an enforcer is part of
+        // --- v0.4 COSMETIC-ONLY sprite state (does not affect ABM mechanics) ---
+        this.animSeed = Math.floor(Math.random() * 1000); // walk-cycle phase offset
+        this.facing = Math.random() < 0.5 ? -1 : 1;       // 1 = right, -1 = left
+        this.flashTimer = 0;                              // white hit-flash frames
+        this.spawnFlash = 14;                             // brief flash on creation
     }
 
     getColor() {
@@ -528,6 +533,11 @@ class Agent {
         // Update radius and visual level based on new mass
         this.radius = this.calculateRadius(this.mass);
         this.updateVisualLevel(); // NEW
+
+        // v0.4 cosmetic: face the direction of travel + decay flash timers
+        if (this.vx < -0.04) this.facing = -1; else if (this.vx > 0.04) this.facing = 1;
+        if (this.flashTimer > 0) this.flashTimer--;
+        if (this.spawnFlash > 0) this.spawnFlash--;
     }
 
     // AI for Cooperators, Defectors, Competitors (Refactored for fluid movement)
@@ -1230,6 +1240,10 @@ class Node {
                     this.isBeingRaided = true;
                     this.raidTimer = PREDATOR_NODE_RAID_TIME; // Start raid timer
                     global.stats.predatorNodeRaids++; // Increment raid stat
+                    // v0.4 FX: siren effect over the raided node
+                    effectEngine.spawn('raid', this.x, this.y, { node: this, radius: this.spawnRadius });
+                    spawnFloatingText(this.x, this.y - 22, 'RAID!', COL.red, 70, 10);
+                    playPixelSound('arrest');
 
                     // NEW: Calculate initial raid force based on mass
                     // The dynamic adjustment logic at the start of the "isBeingRaided" block
@@ -1252,16 +1266,17 @@ class Node {
 } // End Node Class
 
 
-// --- NEW: Floating Text Class ---
+// --- Floating Text Class (v0.4: Press Start 2P pixel text w/ shadow) ---
 class FloatingText {
-    constructor(x, y, text, color, duration) {
+    constructor(x, y, text, color, duration, size = 8) {
         this.x = x;
         this.y = y;
         this.text = text;
         this.color = color;
         this.duration = duration;
         this.maxDuration = duration;
-        this.vy = -0.5; // Moves up
+        this.size = size;
+        this.vy = -0.8; // Floats upward
     }
 
     update() {
@@ -1273,17 +1288,21 @@ class FloatingText {
         ctx.save();
         const alpha = Math.max(0, this.duration / this.maxDuration);
         ctx.globalAlpha = alpha;
-        ctx.fillStyle = this.color;
-        ctx.font = 'bold 12px Arial';
+        ctx.font = `${this.size}px 'Press Start 2P', monospace`;
         ctx.textAlign = 'center';
+        ctx.textBaseline = 'alphabetic';
+        // pixel drop-shadow for readability over busy ground
+        ctx.fillStyle = '#000000';
+        ctx.fillText(this.text, this.x + 1, this.y + 1);
+        ctx.fillStyle = this.color;
         ctx.fillText(this.text, this.x, this.y);
         ctx.restore();
     }
 } // End FloatingText Class
 
 
-// --- NEW: Floating Text Spawner ---
-function spawnFloatingText(x, y, text, color, duration) {
+// --- Floating Text Spawner (v0.4: optional size, grid-throttled) ---
+function spawnFloatingText(x, y, text, color, duration, size = 8) {
     const cellX = Math.floor(x / TEXT_COOLDOWN_GRID_SIZE);
     const cellY = Math.floor(y / TEXT_COOLDOWN_GRID_SIZE);
     const key = `${text}_${cellX}_${cellY}`; // Key based on type and grid location
@@ -1299,7 +1318,7 @@ function spawnFloatingText(x, y, text, color, duration) {
     }, TEXT_COOLDOWN_DURATION);
 
     // Spawn the text
-    floatingTexts.push(new FloatingText(x, y, text, color, duration));
+    floatingTexts.push(new FloatingText(x, y, text, color, duration, size));
 }
 
 
@@ -1468,6 +1487,11 @@ function updateAgents() {
                     if (agent.type === 'defector') {
                         // Defector punishment
                         agent.mass *= (1 - GLOBAL_CONFIG.NODE_PUNISH_RATE);
+                        // v0.4 FX: lightning bolt from nearest co-op node (use pre-teleport pos)
+                        effectEngine.spawnZap(agent.x, agent.y);
+                        spawnFloatingText(agent.x, agent.y - 8, 'ZAP!', COL.cyan, 50, 8);
+                        agent.flashTimer = 10;
+                        playPixelSound('zap');
                         agent.x = getRandom(0, canvas.width); // Teleport
                         agent.y = getRandom(0, canvas.height);
                         global.stats.defectorPunishmentsNode++;
@@ -1526,6 +1550,9 @@ function updateAgents() {
                             } else {
                                 agent.gainMass(netMassGained / 2); // Share
                                 nearestPartner.gainMass(netMassGained / 2);
+                                // v0.4 FX: floating hearts between sharers (grid-throttled)
+                                effectEngine.spawn('trade', agent.x, agent.y - 6);
+                                spawnFloatingText(agent.x, agent.y - 10, 'SHARED', COL.green, 40, 6);
                                 // Track sharing with defectors for exclusion
                                 if (nearestPartner.type === 'defector') {
                                     const count = (agent.shared_with_defectors.get(nearestPartner.id) || 0) + 1;
@@ -1533,6 +1560,9 @@ function updateAgents() {
                                     if (count >= GLOBAL_CONFIG.DEFECTOR_EXCLUSION_THRESHOLD) {
                                         agent.excluded_defectors.add(nearestPartner.id);
                                         global.stats.defectorExclusions++;
+                                        // v0.4 FX: red X over the banned defector
+                                        effectEngine.spawn('exclusion', nearestPartner.x, nearestPartner.y);
+                                        spawnFloatingText(nearestPartner.x, nearestPartner.y - 10, 'BANNED', COL.purple, 55, 6);
                                     }
                                 }
                             }
@@ -1546,6 +1576,11 @@ function updateAgents() {
 
                 // Mark resource for consumption if allowed
                 if (canConsume) {
+                    // v0.4 FX: coin pop (grid-throttled so high speed stays cheap)
+                    if (massGained > 0) {
+                        effectEngine.spawn('coin', resource.x, resource.y);
+                        spawnFloatingText(resource.x, resource.y - 6, '+' + Math.round(massGained), COL.amber, 35, 6);
+                    }
                     if (!resourcesConsumed.includes(k)) {
                          resourcesConsumed.push(k);
                     }
@@ -1589,8 +1624,10 @@ function updateAgents() {
                             if (j < i) i--; // Adjust outer loop index
                             if (removedPredator) {
                                 jail.push({ agent: removedPredator, releaseTime: gameFrame + GLOBAL_CONFIG.JAIL_TIME });
-                                // NEW: Floating text
-                                spawnFloatingText(agent.x, agent.y, 'Arrest', 'rgba(255, 255, 255, 0.7)', 60);
+                                // v0.4 FX: bust flash + BUSTED!
+                                effectEngine.spawn('bust', removedPredator.x, removedPredator.y);
+                                spawnFloatingText(removedPredator.x, removedPredator.y - 14, 'BUSTED!', COL.white, 55, 8);
+                                playPixelSound('arrest');
                             }
                         }
                         if (enforcerDefeated) {
@@ -1657,7 +1694,10 @@ function updateAgents() {
                                 if (!isNaN(bribeAmount)) {
                                      other.mass -= bribeAmount;
                                      global.stats.bribesPaid++;
-                                     // console.log(`Predator ${other.id} bribed Enforcer ${agent.id}`);
+                                     // v0.4 FX: cash + spin + BRIBED!
+                                     effectEngine.spawn('bribe', agent.x, agent.y);
+                                     spawnFloatingText(agent.x, agent.y - 14, 'BRIBED!', COL.amber, 55, 8);
+                                     playPixelSound('bribe');
                                 }
                             }
                         } else { // Arrest successful
@@ -1673,8 +1713,10 @@ function updateAgents() {
                              if (j < i) i--;
                               if (removedPredator) { // Ensure splice worked before jailing
                                 jail.push({ agent: removedPredator, releaseTime: gameFrame + GLOBAL_CONFIG.JAIL_TIME });
-                                // NEW: Floating text
-                                spawnFloatingText(agent.x, agent.y, 'Arrest', 'rgba(255, 255, 255, 0.7)', 60);
+                                // v0.4 FX: bust flash + BUSTED!
+                                effectEngine.spawn('bust', removedPredator.x, removedPredator.y);
+                                spawnFloatingText(removedPredator.x, removedPredator.y - 14, 'BUSTED!', COL.white, 55, 8);
+                                playPixelSound('arrest');
                               }
                         }
                     } // End standard arrest logic
@@ -1692,8 +1734,12 @@ function updateAgents() {
                         global.stats.theftsCommitted++;
                         agent.crimeCount++; // NEW: Increment predator's crime count
                         recentCrimes.push({ x: agent.x, y: agent.y, time: gameFrame }); // NEW: Log crime event
-                        // NEW: Floating text for crime
-                        spawnFloatingText(agent.x, agent.y, 'Crime', 'rgba(239, 68, 68, 0.8)', 60);
+                        // --- v0.4 FX: blood splash + stolen-amount popups ---
+                        effectEngine.spawn('blood', other.x, other.y);
+                        spawnFloatingText(other.x, other.y - 6, '-' + Math.round(actualStolenMass), COL.red, 45, 6);
+                        spawnFloatingText(agent.x, agent.y - 12, '+' + Math.round(actualStolenMass), COL.green, 45, 6);
+                        agent.flashTimer = 4;
+                        playPixelSound('theft');
 
                         // Contribute portion to predator node pool
                         const investment = actualStolenMass * PREDATOR_NODE_CONTRIBUTION_RATE;
@@ -1719,7 +1765,12 @@ function updateAgents() {
          const agent = agents[i];
          // Remove agent if below minimum mass or invalid (CHANGED: Added position check)
          if (!agent || agent.mass <= agent.MINIMUM_MASS || isNaN(agent.mass) || isNaN(agent.x) || isNaN(agent.y)) {
-             // if (agent) console.log(`Agent ${agent.id} (${agent.type}) died or was removed due to invalid state.`);
+             // v0.4 FX: death poof (only for agents with a valid on-screen position)
+             if (agent && !isNaN(agent.x) && !isNaN(agent.y)) {
+                 effectEngine.spawn('death', agent.x, agent.y);
+                 spawnFloatingText(agent.x, agent.y - 8, 'x_x', COL.gray, 60, 6);
+                 playPixelSound('death');
+             }
              agents.splice(i, 1);
          }
     }
@@ -1830,7 +1881,10 @@ function updateCoopInvestment() {
         if (validSpot) {
             nodes.push(new Node(newNodeX, newNodeY, 'cooperator')); // Specify type
             global.stats.nodesBuilt++; // Increment co-op node count
-             // console.log("Co-op node built.");
+            // v0.4 FX: construction dust + banner
+            effectEngine.spawn('build', newNodeX, newNodeY);
+            spawnFloatingText(newNodeX, newNodeY - 18, 'NODE BUILT!', COL.cyan, 80, 8);
+            playPixelSound('build');
         } else {
              // console.log("Failed to find spot for Co-op node, refunding.");
             global.nodeResourceMass += NODE_MASS_THRESHOLD; // Refund if no spot found
@@ -1865,7 +1919,10 @@ function updatePredatorInvestment() {
         if (validSpot) {
             nodes.push(new Node(newNodeX, newNodeY, 'predator')); // Specify type
             global.stats.predatorNodesBuilt++; // Increment predator node count
-             // console.log("Predator node built.");
+            // v0.4 FX: construction dust + ominous banner
+            effectEngine.spawn('build', newNodeX, newNodeY);
+            spawnFloatingText(newNodeX, newNodeY - 18, 'HIDEOUT!', COL.red, 80, 8);
+            playPixelSound('build');
         } else {
             // console.log("Failed to find spot for Predator node, refunding.");
             global.predatorNodeMass += PREDATOR_NODE_MASS_THRESHOLD; // Refund if no spot found
@@ -2101,47 +2158,636 @@ function updateStats() {
 function setSpeed(newSpeed) {
     currentSpeedMultiplier = newSpeed;
     if (currentSpeedDisplay) currentSpeedDisplay.textContent = `${newSpeed}x`; // Safety check
+    // v0.4: pixel-button active state
     document.querySelectorAll('.speed-btn').forEach(btn => {
-        // Use dataset for speed comparison
-        if (parseInt(btn.dataset.speed) === newSpeed) {
-            btn.classList.replace('bg-gray-200', 'bg-blue-500');
-            btn.classList.replace('text-gray-800', 'text-white');
-            btn.classList.add('shadow-md');
-        } else {
-            btn.classList.replace('bg-blue-500', 'bg-gray-200');
-            btn.classList.replace('text-white', 'text-gray-800');
-            btn.classList.remove('shadow-md');
-        }
+        btn.classList.toggle('active', parseInt(btn.dataset.speed) === newSpeed);
     });
 } // End setSpeed
 
 // --- Main Loop and Controls ---
 
-function draw() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear canvas
+/* ============================================================================
+   v0.4 PIXEL-ART RENDER LAYER
+   The ABM mechanics above are untouched. Everything below only changes how
+   the world is DRAWN: chunky sprites, CRT effects, particles, boot sequence.
+   ============================================================================ */
 
-    // Draw resources first (with safety check)
-    resources.forEach(r => { if (r && !isNaN(r.x) && !isNaN(r.y)) r.draw(); }); // Added NaN check
+ctx.imageSmoothingEnabled = false; // CRITICAL: keep pixels crisp
 
-    // Draw nodes (and handle removal within the loop)
-    for (let i = nodes.length - 1; i >= 0; i--) {
+// JS-side palette (mirror of style.css)
+const COL = {
+    black:'#0a0a0a', dark:'#1a1a2e', panel:'#16213e', border:'#0f3460',
+    steel:'#2d4a7a', dim:'#4a6fa5', white:'#e0e0e0', bright:'#ffffff',
+    green:'#00ff41', greenDim:'#007a1f', amber:'#ffb627',
+    red:'#ff2d2d', redDim:'#8b0000', blue:'#4169e1', blueBright:'#60a5fa',
+    cyan:'#00ffff', purple:'#9b59ff', orange:'#ff8c00', gray:'#555577',
+    grass1:'#16271a', grass2:'#1b3020', road:'#2a2a2a',
+};
+
+const SPRITE_SCALE = 3; // canvas px per sprite px
+
+// --- low-level pixel helpers ---
+function parseSprite(rows){
+    return rows.map(r => r.split('').map(ch => ch === '.' ? 0 : parseInt(ch, 10)));
+}
+// draw a sprite grid CENTERED on (cx,cy). 0 = transparent. optional flip + solid tint.
+function drawSprite(grid, palette, cx, cy, scale, flipH, tint){
+    const h = grid.length, w = grid[0].length;
+    const ox = Math.round(cx - (w * scale) / 2);
+    const oy = Math.round(cy - (h * scale) / 2);
+    for (let r = 0; r < h; r++){
+        const row = grid[r];
+        for (let c = 0; c < w; c++){
+            const idx = flipH ? row[w - 1 - c] : row[c];
+            if (!idx) continue;
+            ctx.fillStyle = tint || palette[idx] || '#f0f';
+            ctx.fillRect(ox + c * scale, oy + r * scale, scale, scale);
+        }
+    }
+}
+
+// --- AGENT SPRITES (7x8, 2-frame walk via leg-swap) ---
+function walkFrames(base){
+    const b = base.map(r => r.slice());
+    const t = b[6]; b[6] = b[7]; b[7] = t; // step: swap the two leg rows
+    return [base, b];
+}
+const SPR = {
+    cooperator: {
+        pal: [null, COL.greenDim, COL.green, COL.white, COL.cyan],
+        frames: walkFrames(parseSprite([
+            "..111..",".12221.",".13231.","4122214",".12221.",".12221.","..1.1..",".1...1."]))
+    },
+    defector: {
+        pal: [null, '#3b1d6b', COL.purple, '#ffe400'],
+        frames: walkFrames(parseSprite([
+            "..111..",".12221.",".12221.","1232321",".12221.",".12221.","..1.1..",".1...1."]))
+    },
+    competitor: {
+        pal: [null, '#a85a00', COL.orange, COL.white, COL.gray],
+        frames: walkFrames(parseSprite([
+            "..111..",".12221.",".13231.",".12321.",".122214",".122214","..1.1..",".1...1."]))
+    },
+    predator: {
+        pal: [null, COL.redDim, COL.red, COL.dark, COL.white],
+        frames: walkFrames(parseSprite([
+            "..111..",".12221.",".13331.",".122214",".122214",".12221.","..1.1..",".1...1."]))
+    },
+    enforcer: {
+        pal: [null, '#1e3a8a', COL.blue, COL.amber, COL.black],
+        frames: walkFrames(parseSprite([
+            ".11111.",".12221.",".12221.",".12321.","412221.",".12221.","..1.1..",".1...1."]))
+    },
+};
+
+// --- RESOURCE "GRUB" sprite (5x5) with per-type palette ---
+const GRUB = parseSprite(["..1..",".121.","12321",".121.","..1.."]);
+const GRUB_PAL = {
+    normal:     [null, '#a8740c', COL.amber, COL.white],
+    cooperator: [null, '#0e7490', COL.cyan,  COL.white],
+    predator:   [null, '#9a3412', COL.orange, COL.white],
+};
+
+// --- procedural NODE sprites (cleaner than a 16x16 hand grid) ---
+function drawCoopNodeSprite(cx, cy){
+    const s = 3;                       // pixel size
+    const P = (px, py, w, hh, col) => { ctx.fillStyle = col; ctx.fillRect(Math.round(cx + px*s), Math.round(cy + py*s), w*s, hh*s); };
+    // flag (waves)
+    const wave = (gameFrame % 40 < 20);
+    P(-1, -10, 1, 6, COL.white);                       // pole
+    if (wave) P(0, -10, 4, 3, COL.cyan); else P(0, -9, 4, 3, COL.cyan);
+    // roof (stepped triangle)
+    for (let i = 0; i < 4; i++) P(-4 + i, -4 - i + 0, (8 - i*2), 1, COL.border);
+    P(-5, -4, 10, 1, COL.border);
+    // walls
+    P(-5, -3, 10, 6, COL.steel);
+    P(-4, -2, 8, 4, COL.dim);
+    // door
+    P(-1, 0, 2, 3, COL.black);
+    // base
+    P(-5, 3, 10, 1, COL.panel);
+}
+function drawPredNodeSprite(cx, cy){
+    const s = 3;
+    const P = (px, py, w, hh, col) => { ctx.fillStyle = col; ctx.fillRect(Math.round(cx + px*s), Math.round(cy + py*s), w*s, hh*s); };
+    // smoke
+    const sm = (gameFrame % 30) / 30;
+    ctx.fillStyle = COL.gray;
+    ctx.globalAlpha = 0.5 * (1 - sm);
+    ctx.fillRect(Math.round(cx - 2*s), Math.round(cy - (7 + sm*3)*s), s, s);
+    ctx.fillRect(Math.round(cx + 1*s), Math.round(cy - (8 + sm*3)*s), s, s);
+    ctx.globalAlpha = 1;
+    // rock arch
+    P(-5, -4, 10, 9, '#2a2a2a');
+    P(-4, -3, 8, 7, '#1a1a2e');
+    // void mouth
+    P(-3, -2, 6, 6, COL.black);
+    // glowing eyes (blink)
+    if (gameFrame % 80 > 8){ P(-2, 0, 1, 1, COL.red); P(1, 0, 1, 1, COL.red); }
+}
+
+// --- GLYPHS for effects ---
+const SKULL = parseSprite([".111.","12321","12321",".111.","1.1.1"]); // 5x5
+const SKULL_PAL = [null, COL.gray, COL.white, COL.black];
+
+/* ---------------- GROUND TEXTURE (cached to offscreen canvas) -------------- */
+let groundCanvas = null;
+const staticObjects = [];
+function buildStaticObjects(){
+    staticObjects.length = 0;
+    for (let i = 0; i < 7; i++) staticObjects.push({ t:'bench', x: getRandom(40, canvas.width-40), y: getRandom(40, canvas.height-40) });
+    for (let i = 0; i < 4; i++) staticObjects.push({ t:'tree',  x: getRandom(40, canvas.width-40), y: getRandom(40, canvas.height-40) });
+}
+function buildGround(){
+    groundCanvas = document.createElement('canvas');
+    groundCanvas.width = canvas.width; groundCanvas.height = canvas.height;
+    const g = groundCanvas.getContext('2d');
+    g.imageSmoothingEnabled = false;
+    // grass checkerboard
+    for (let y = 0; y < canvas.height; y += 32){
+        for (let x = 0; x < canvas.width; x += 32){
+            g.fillStyle = ((x/32 + y/32) % 2 === 0) ? COL.grass1 : COL.grass2;
+            g.fillRect(x, y, 32, 32);
+        }
+    }
+    // dashed city roads
+    g.fillStyle = COL.road;
+    const my = canvas.height/2, mx = canvas.width/2;
+    for (let x = 0; x < canvas.width; x += 24){ g.fillRect(x, my-2, 16, 4); }
+    for (let y = 0; y < canvas.height; y += 24){ g.fillRect(mx-2, y, 4, 16); }
+    // static props baked in
+    if (staticObjects.length === 0) buildStaticObjects();
+    for (const o of staticObjects){
+        if (o.t === 'bench'){ g.fillStyle = COL.gray; g.fillRect(o.x|0, o.y|0, 9, 4); g.fillStyle = COL.steel; g.fillRect(o.x|0, (o.y+4)|0, 9, 2); }
+        else { // tree: 5x5 star-ish
+            g.fillStyle = '#0d3d12'; g.fillRect(o.x|0, o.y|0, 12, 12);
+            g.fillStyle = '#155c1d'; g.fillRect((o.x+2)|0, (o.y+2)|0, 8, 8);
+            g.fillStyle = '#1f8a2c'; g.fillRect((o.x+4)|0, (o.y+4)|0, 4, 4);
+        }
+    }
+}
+function drawGroundTexture(){
+    if (!groundCanvas) buildGround();
+    ctx.drawImage(groundCanvas, 0, 0);
+}
+
+/* ---------------- NODE TERRITORIES + SPRITES + culling -------------------- */
+function drawNodeTerritories(){
+    for (const node of nodes){
+        if (!node || isNaN(node.x)) continue;
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, node.spawnRadius, 0, Math.PI*2);
+        ctx.fillStyle = node.nodeType === 'cooperator' ? 'rgba(0,255,255,0.10)' : 'rgba(255,45,45,0.10)';
+        ctx.fill();
+        // pulsing perimeter ring
+        const pulse = (gameFrame % 90) / 90;
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, node.spawnRadius * pulse, 0, Math.PI*2);
+        ctx.strokeStyle = node.nodeType === 'cooperator'
+            ? `rgba(0,255,255,${0.45*(1-pulse)})` : `rgba(255,45,45,${0.45*(1-pulse)})`;
+        ctx.lineWidth = 1; ctx.stroke();
+        // raided node flashes its whole territory
+        if (node.isBeingRaided){
+            ctx.beginPath(); ctx.arc(node.x, node.y, node.spawnRadius, 0, Math.PI*2);
+            ctx.strokeStyle = (gameFrame % 16 < 8) ? COL.red : COL.blue; ctx.lineWidth = 2; ctx.stroke();
+        }
+    }
+}
+function drawNodesPix(){
+    // cull dead nodes (preserves engine behavior from the old draw loop)
+    for (let i = nodes.length - 1; i >= 0; i--){
         const node = nodes[i];
-         // Remove node if marked for deletion (mass <= 0 or invalid)
-         if (!node || node.mass <= 0 || isNaN(node.mass)) {
-             nodes.splice(i, 1);
-         } else {
-             node.draw(); // Draw active nodes (Node update is now in gameLoop)
-         } // <-- ADDED MISSING BRACE
-    } // <-- ADDED MISSING BRACE
+        if (!node || node.mass <= 0 || isNaN(node.mass)){ nodes.splice(i, 1); continue; }
+        if (node.nodeType === 'cooperator') drawCoopNodeSprite(node.x, node.y);
+        else drawPredNodeSprite(node.x, node.y);
+    }
+}
+function drawResourcesPix(){
+    for (const r of resources){
+        if (!r || isNaN(r.x) || isNaN(r.y)) continue;
+        const bob = (Math.floor(gameFrame/12) % 2 === 0) ? 0 : -1; // 2-frame bob
+        const pal = GRUB_PAL[r.nodeType] || GRUB_PAL.normal;
+        const sc = r.nodeType === 'normal' ? 2 : 3;
+        drawSprite(GRUB, pal, r.x, r.y + bob, sc, false, null);
+    }
+}
 
-    // Draw agents, sorted by mass (smallest first for better visibility)
-    // Create a copy, filter out invalid agents, then sort
-    const validAgents = agents.filter(a => a && !isNaN(a.mass) && !isNaN(a.x) && !isNaN(a.y)); // Added pos check
-    validAgents.sort((a, b) => a.mass - b.mass);
-    validAgents.forEach(a => a.draw()); // Draw valid, sorted agents
+/* ---------------- AGENTS as sprites ---------------------------------------- */
+function drawAgentSprite(a){
+    const def = SPR[a.type];
+    if (!def){ return; }
+    // scale grows a touch with mass / visual level so big agents read as bigger
+    const scale = SPRITE_SCALE + Math.min(2, a.visualLevel);
+    const moving = (a.vx*a.vx + a.vy*a.vy) > 0.02;
+    const rate = a.fleeingCrime ? 4 : 8; // flee = faster legs
+    const fi = moving ? (Math.floor((gameFrame + a.animSeed) / rate) % def.frames.length) : 0;
+    // shadow blob
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(Math.round(a.x - 7), Math.round(a.y + 9), 14, 3);
+    // flash states
+    let tint = null;
+    if (a.spawnFlash > 0 && gameFrame % 4 < 2) tint = COL.bright;
+    else if (a.flashTimer > 0 && gameFrame % 2 === 0) tint = COL.bright;
+    else if (a.immunityTimer > 0 && gameFrame % 20 < 10) tint = COL.bright;
+    else if (a.type === 'enforcer' && a.isRaiding && gameFrame % 20 < 10) tint = COL.amber;
+    drawSprite(def.frames[fi], def.pal, a.x, a.y, scale, a.facing < 0, tint);
+    // level-3 crown star
+    if (a.visualLevel >= 3){
+        ctx.fillStyle = COL.amber;
+        ctx.fillRect(Math.round(a.x-1), Math.round(a.y - 8 - scale*4), 2, 2);
+    }
+}
+function drawAgents(){
+    const valid = agents.filter(a => a && !isNaN(a.mass) && !isNaN(a.x) && !isNaN(a.y));
+    valid.sort((a, b) => a.mass - b.mass); // small first
+    valid.forEach(drawAgentSprite);
+}
 
-    // NEW: Draw floating texts
-    floatingTexts.forEach(t => { if (t) t.draw(); });
+/* ---------------- JAIL CORNER --------------------------------------------- */
+function drawJailCorner(){
+    const w = 92, h = 64, x0 = 4, y0 = canvas.height - h - 4;
+    ctx.fillStyle = 'rgba(10,10,10,0.82)'; ctx.fillRect(x0, y0, w, h);
+    ctx.strokeStyle = COL.gray; ctx.lineWidth = 2; ctx.strokeRect(x0, y0, w, h);
+    ctx.fillStyle = COL.green; ctx.font = "6px 'Press Start 2P', monospace"; ctx.textAlign = 'left';
+    ctx.fillText('JAIL ' + jail.length, x0 + 4, y0 + 11);
+    // jailed sprites behind bars
+    let i = 0;
+    for (const entry of jail){
+        if (!entry || !entry.agent) continue;
+        const col = i % 5, row = Math.floor(i / 5);
+        if (row > 1) break; // show up to 10
+        const jx = x0 + 12 + col*16, jy = y0 + 30 + row*22;
+        const def = SPR[entry.agent.type];
+        if (def) drawSprite(def.frames[0], def.pal, jx, jy, 2, false, null);
+        // rotating star above
+        const ang = (gameFrame + i*20) * 0.15;
+        ctx.fillStyle = COL.amber;
+        ctx.fillRect(Math.round(jx + Math.cos(ang)*5 - 1), Math.round(jy - 11 + Math.sin(ang)*2), 2, 2);
+        i++;
+    }
+    // bars
+    ctx.strokeStyle = COL.steel; ctx.lineWidth = 2;
+    for (let bx = x0 + 8; bx < x0 + w - 4; bx += 9){
+        ctx.beginPath(); ctx.moveTo(bx, y0 + 16); ctx.lineTo(bx, y0 + h - 4); ctx.stroke();
+    }
+}
+
+/* ---------------- CANVAS HUD (mini status, top-center) -------------------- */
+function drawCanvasHUD(){
+    // top-center stats moved to the bottom status bar (top-center now hosts the logo notch).
+    if (isAnyRaidActive()){
+        ctx.fillStyle = (gameFrame % 20 < 10) ? COL.red : COL.amber;
+        ctx.font = "6px 'Press Start 2P', monospace"; ctx.textAlign = 'center';
+        ctx.fillText('! RAID IN PROGRESS !', canvas.width/2, canvas.height - 10);
+    }
+}
+
+/* ============================================================================
+   EFFECT ENGINE — pooled transient particle effects, decoupled from sim speed
+   ============================================================================ */
+const fxFrameKeys = new Set();     // per-render-frame throttle of duplicate FX
+const MAX_EFFECTS = 240;
+class Effect {
+    constructor(type, x, y, opts){
+        this.type = type; this.x = x; this.y = y; this.opts = opts || {};
+        this.life = this.opts.life || 50; this.maxLife = this.life;
+        this.parts = [];
+        const rnd = (a,b) => Math.random()*(b-a)+a;
+        if (type === 'blood'){
+            const n = 8 + (Math.random()*5|0);
+            for (let i=0;i<n;i++){ const a=Math.random()*Math.PI*2, sp=rnd(0.5,2.2);
+                this.parts.push({x:0,y:0,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:rnd(24,40)}); }
+            this.stain = []; this.life = 110; this.maxLife = 110;
+        } else if (type === 'build'){
+            for (let i=0;i<10;i++){ const a=Math.random()*Math.PI*2;
+                this.parts.push({x:0,y:0,vx:Math.cos(a)*rnd(0.4,1.6),vy:-rnd(1,2.4),life:rnd(30,46)}); }
+            this.life = 50; this.maxLife = 50;
+        } else if (type === 'death'){
+            for (let i=0;i<8;i++){ const a=Math.random()*Math.PI*2;
+                this.parts.push({x:0,y:0,vx:Math.cos(a)*rnd(0.3,1.2),vy:Math.sin(a)*rnd(0.3,1.2),life:rnd(16,26)}); }
+            this.life = 80; this.maxLife = 80;
+        } else if (type === 'trade'){
+            for (let i=0;i<5;i++) this.parts.push({x:rnd(-5,5),y:0,vx:rnd(-0.2,0.2),vy:-rnd(0.4,0.8),life:rnd(34,50)});
+            this.life = 50; this.maxLife = 50;
+        } else if (type === 'coin'){
+            for (let i=0;i<3;i++){ const a=Math.random()*Math.PI*2;
+                this.parts.push({x:0,y:0,vx:Math.cos(a)*rnd(0.4,1.1),vy:-rnd(0.6,1.4),life:rnd(20,30)}); }
+            this.life = 30; this.maxLife = 30;
+        } else if (type === 'bribe'){
+            for (let i=0;i<4;i++) this.parts.push({x:rnd(-4,4),y:0,vx:rnd(-0.2,0.2),vy:-rnd(0.5,1),life:rnd(34,50)});
+            this.life = 50; this.maxLife = 50;
+        } else if (type === 'bust'){ this.life = 50; this.maxLife = 50;
+        } else if (type === 'zap'){ this.life = 18; this.maxLife = 18;
+        } else if (type === 'raid'){ this.life = 70; this.maxLife = 70;
+        } else if (type === 'exclusion'){ this.life = 50; this.maxLife = 50; }
+    }
+    get progress(){ return 1 - this.life / this.maxLife; }
+    update(){
+        this.life--;
+        if (['blood','build','death','trade','coin','bribe'].includes(this.type)){
+            for (const p of this.parts){
+                p.x += p.vx; p.y += p.vy; p.life--;
+                if (this.type === 'blood') { p.vx *= 0.92; p.vy *= 0.92; }
+                if (this.type === 'build' || this.type === 'coin') p.vy += 0.12; // gravity
+            }
+        }
+    }
+    draw(ctx){
+        const a = Math.max(0, this.life / this.maxLife);
+        if (this.type === 'blood'){
+            for (const p of this.parts){ if (p.life<=0) continue;
+                ctx.fillStyle = p.life>18 ? COL.red : COL.redDim;
+                ctx.globalAlpha = Math.min(1, p.life/20);
+                ctx.fillRect((this.x+p.x)|0, (this.y+p.y)|0, 2, 2); }
+            ctx.globalAlpha = 1;
+        } else if (this.type === 'build'){
+            for (const p of this.parts){ if (p.life<=0) continue;
+                ctx.fillStyle = (p.life%2) ? COL.white : COL.gray;
+                ctx.fillRect((this.x+p.x)|0, (this.y+p.y)|0, 2, 2); }
+        } else if (this.type === 'death'){
+            for (const p of this.parts){ if (p.life<=0) continue;
+                ctx.globalAlpha = Math.min(1,p.life/14); ctx.fillStyle = COL.gray;
+                ctx.fillRect((this.x+p.x)|0, (this.y+p.y)|0, 2, 2); }
+            ctx.globalAlpha = 1;
+            drawSprite(SKULL, SKULL_PAL, this.x, this.y - this.progress*16, 2, false, null);
+        } else if (this.type === 'trade'){
+            for (const p of this.parts){ if (p.life<=0) continue;
+                ctx.globalAlpha = Math.min(1,p.life/26);
+                ctx.fillStyle = p.life>22 ? COL.green : COL.greenDim;
+                const hx=(this.x+p.x)|0, hy=(this.y+p.y)|0; // tiny 3px heart
+                ctx.fillRect(hx-1,hy,1,1); ctx.fillRect(hx+1,hy,1,1); ctx.fillRect(hx,hy+1,1,1); }
+            ctx.globalAlpha = 1;
+        } else if (this.type === 'coin'){
+            for (const p of this.parts){ if (p.life<=0) continue;
+                ctx.globalAlpha = Math.min(1,p.life/16); ctx.fillStyle = COL.amber;
+                const cx=(this.x+p.x)|0, cy=(this.y+p.y)|0;
+                ctx.fillRect(cx,cy-1,1,3); ctx.fillRect(cx-1,cy,3,1); }
+            ctx.globalAlpha = 1;
+        } else if (this.type === 'bribe'){
+            ctx.globalAlpha = a; ctx.fillStyle = COL.amber; ctx.font = "8px 'Press Start 2P', monospace"; ctx.textAlign='center';
+            for (const p of this.parts) ctx.fillText('$', (this.x+p.x)|0, (this.y+p.y)|0);
+            ctx.globalAlpha = 1;
+        } else if (this.type === 'bust'){
+            const r = 30 + this.progress*30;
+            ctx.globalAlpha = a*0.7; ctx.strokeStyle = COL.blue; ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.arc(this.x, this.y, r, 0, Math.PI*2); ctx.stroke();
+            if (this.progress < 0.3){ ctx.globalAlpha = (0.3-this.progress)*1.5; ctx.fillStyle = COL.blue;
+                ctx.beginPath(); ctx.arc(this.x,this.y,30,0,Math.PI*2); ctx.fill(); }
+            ctx.globalAlpha = 1; // 4 orbiting stars
+            for (let s=0;s<4;s++){ const ang=this.progress*6 + s*Math.PI/2;
+                ctx.fillStyle = COL.white; ctx.fillRect((this.x+Math.cos(ang)*22-1)|0,(this.y+Math.sin(ang)*22-1)|0,3,3); }
+        } else if (this.type === 'zap'){
+            const sx = this.opts.sx, sy = this.opts.sy;
+            ctx.globalAlpha = a; ctx.strokeStyle = (this.life%2) ? COL.amber : COL.cyan; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.moveTo(sx, sy);
+            const segs = 6, dx=(this.x-sx)/segs, dy=(this.y-sy)/segs;
+            for (let s=1;s<=segs;s++){ const off = (s%2?1:-1)*6;
+                ctx.lineTo(sx+dx*s + (-dy/Math.hypot(dx,dy||1))*off, sy+dy*s + (dx/Math.hypot(dx,dy||1))*off); }
+            ctx.lineTo(this.x, this.y); ctx.stroke(); ctx.globalAlpha = 1;
+        } else if (this.type === 'raid'){
+            const ang = this.progress*Math.PI*6;
+            for (let s=0;s<2;s++){ const aa=ang+s*Math.PI;
+                ctx.fillStyle = s? COL.blue : COL.red;
+                ctx.fillRect((this.x+Math.cos(aa)*20-1)|0,(this.y+Math.sin(aa)*20-1)|0,3,3); }
+            ctx.globalAlpha = a*0.5; ctx.fillStyle = (gameFrame%16<8)?COL.red:COL.blue;
+            ctx.beginPath(); ctx.arc(this.x,this.y, (this.opts.radius||40)*0.4, 0, Math.PI*2); ctx.fill();
+            ctx.globalAlpha = 1;
+        } else if (this.type === 'exclusion'){
+            ctx.globalAlpha = a; ctx.strokeStyle = COL.purple; ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.moveTo(this.x-7,this.y-7); ctx.lineTo(this.x+7,this.y+7);
+            ctx.moveTo(this.x+7,this.y-7); ctx.lineTo(this.x-7,this.y+7); ctx.stroke(); ctx.globalAlpha = 1;
+        }
+    }
+    get under(){ return this.type === 'blood'; } // blood draws beneath agents
+}
+const effectEngine = {
+    effects: [],
+    spawn(type, x, y, opts){
+        if (this.effects.length >= MAX_EFFECTS) return;
+        // grid throttle: at most one of each type per 24px cell per render frame
+        const key = type + '_' + (x/24|0) + '_' + (y/24|0);
+        if (fxFrameKeys.has(key)) return;
+        fxFrameKeys.add(key);
+        this.effects.push(new Effect(type, x, y, opts));
+    },
+    // lightning from nearest co-op node to (tx,ty)
+    spawnZap(tx, ty){
+        let src = null, md = Infinity;
+        for (const n of nodes){ if (n && n.nodeType === 'cooperator'){ const d = distance(tx,ty,n.x,n.y); if (d<md){md=d; src=n;} } }
+        const sx = src ? src.x : tx, sy = src ? src.y - 6 : ty - 30;
+        this.spawn('zap', tx, ty, { sx, sy });
+    },
+    update(){
+        for (let i = this.effects.length - 1; i >= 0; i--){
+            this.effects[i].update();
+            if (this.effects[i].life <= 0) this.effects.splice(i, 1);
+        }
+    },
+    drawUnder(ctx){ for (const e of this.effects) if (e.under) e.draw(ctx); },
+    drawOver(ctx){ for (const e of this.effects) if (!e.under) e.draw(ctx); },
+};
+
+/* ============================================================================
+   AUDIO — smooth ambient SFX + original procedural "creator-mode" music
+   (WebAudio: filtered, enveloped voices through a soft reverb; never harsh.)
+   ============================================================================ */
+let audioCtx = null;
+let soundOn = true;
+let masterGain = null, masterLP = null, reverbBus = null, sfxBus = null, musicBus = null;
+let sfxLastAt = {};                       // per-type real-time cooldown
+let soundBudget = 0, soundBudgetFrame = -1;
+const NOTE = m => 440 * Math.pow(2, (m - 69) / 12);
+
+function makeReverbIR(ctx, seconds, decay){
+    const len = Math.max(1, Math.floor(ctx.sampleRate * seconds));
+    const buf = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (let ch = 0; ch < 2; ch++){
+        const d = buf.getChannelData(ch);
+        for (let i = 0; i < len; i++) d[i] = (Math.random()*2 - 1) * Math.pow(1 - i/len, decay);
+    }
+    return buf;
+}
+function initAudio(){
+    if (audioCtx){ if (audioCtx.state === 'suspended') audioCtx.resume(); return; }
+    if (!window.AudioContext && !window.webkitAudioContext) return;
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch(e){ audioCtx = null; return; }
+    const ctx = audioCtx;
+    masterGain = ctx.createGain(); masterGain.gain.value = 0.8;
+    masterLP = ctx.createBiquadFilter(); masterLP.type = 'lowpass'; masterLP.frequency.value = 6800; masterLP.Q.value = 0.2;
+    masterGain.connect(masterLP); masterLP.connect(ctx.destination);
+    const conv = ctx.createConvolver(); conv.buffer = makeReverbIR(ctx, 2.4, 2.8);
+    reverbBus = ctx.createGain(); reverbBus.gain.value = 0.9; reverbBus.connect(conv); conv.connect(masterGain);
+    sfxBus = ctx.createGain(); sfxBus.gain.value = 0.5; sfxBus.connect(masterGain);
+    musicBus = ctx.createGain(); musicBus.gain.value = 0.0; musicBus.connect(masterGain);
+    const sfxSend = ctx.createGain(); sfxSend.gain.value = 0.16; sfxBus.connect(sfxSend); sfxSend.connect(reverbBus);
+    const musSend = ctx.createGain(); musSend.gain.value = 0.14; musicBus.connect(musSend); musSend.connect(reverbBus);
+    if (ctx.state === 'suspended') ctx.resume();
+    if (soundOn) startMusic();
+}
+// one soft voice: osc -> lowpass -> gain(ADSR-ish) -> bus
+function voice(o){
+    if (!audioCtx) return;
+    const ctx = audioCtx, t = o.t || ctx.currentTime, dur = o.dur || 0.3;
+    const osc = ctx.createOscillator(); osc.type = o.type || 'sine';
+    osc.frequency.setValueAtTime(o.f0, t);
+    if (o.f1) osc.frequency.exponentialRampToValueAtTime(Math.max(1, o.f1), t + (o.gl || dur));
+    if (o.detune) osc.detune.value = o.detune;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(o.cut || 2200, t);
+    if (o.cut1) lp.frequency.exponentialRampToValueAtTime(o.cut1, t + dur);
+    const g = ctx.createGain();
+    const a = o.a != null ? o.a : 0.01, peak = o.g || 0.08;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + a);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.connect(lp); lp.connect(g); g.connect(o.bus || sfxBus);
+    osc.start(t); osc.stop(t + dur + 0.02);
+}
+function playPixelSound(type){
+    if (!soundOn || !audioCtx) return;
+    if (soundBudgetFrame !== gameFrame){ soundBudgetFrame = gameFrame; soundBudget = 0; }
+    if (soundBudget >= 3) return;
+    const now = audioCtx.currentTime;
+    const cd = { theft:0.22, zap:0.18, arrest:0.12, death:0.16, build:0.05, bribe:0.12 }[type] || 0.12;
+    if (sfxLastAt[type] && now - sfxLastAt[type] < cd) return;
+    sfxLastAt[type] = now; soundBudget++;
+    const det = Math.random()*16 - 8;     // gentle per-hit pitch variation
+    switch(type){
+        case 'theft':                     // soft muted low pluck
+            voice({ type:'sine', f0:NOTE(50), f1:NOTE(43), dur:0.34, g:0.085, cut:700, a:0.008, detune:det }); break;
+        case 'arrest':                    // pleasant rising bell (E5 -> B5)
+            voice({ type:'triangle', f0:NOTE(76), dur:0.5, g:0.07, cut:2600, a:0.006, detune:det });
+            voice({ type:'sine', t:now+0.09, f0:NOTE(83), dur:0.55, g:0.055, cut:3000, a:0.006 }); break;
+        case 'zap':                       // soft bright shimmer
+            voice({ type:'triangle', f0:NOTE(96), f1:NOTE(89), dur:0.16, g:0.05, cut:4200, a:0.003, detune:det }); break;
+        case 'build':                     // warm marimba arpeggio C-E-G
+            [60,64,67].forEach((m,i)=> voice({ type:'triangle', t:now+i*0.07, f0:NOTE(m), dur:0.4, g:0.055, cut:2400, a:0.004 })); break;
+        case 'bribe':                     // soft coin ding-ding (G5 -> C6)
+            voice({ type:'sine', f0:NOTE(79), dur:0.3, g:0.05, cut:3000, a:0.003 });
+            voice({ type:'sine', t:now+0.08, f0:NOTE(84), dur:0.34, g:0.05, cut:3200, a:0.003 }); break;
+        case 'death':                     // gentle low descending
+            voice({ type:'sine', f0:NOTE(55), f1:NOTE(43), dur:0.45, g:0.07, cut:900, a:0.01, detune:det }); break;
+        default:
+            voice({ type:'sine', f0:NOTE(69), dur:0.2, g:0.05, cut:2000 });
+    }
+}
+// very soft typewriter tick (slight random pitch so it patters pleasantly)
+function playType(){
+    if (!soundOn || !audioCtx) return;
+    voice({ type:'triangle', f0:1150 + Math.random()*420, dur:0.035, g:0.017, cut:2600, a:0.001 });
+}
+
+/* ---- ORIGINAL background music: gentle looping bed (my own motif) ---- */
+let musicTimer = null, musicStep = 0, musicNextTime = 0, musicOn = false;
+const M_BPM = 96, M_STEP = (60 / M_BPM) / 4;                 // 16th-note grid
+const M_BEAT = 60 / M_BPM;
+const M_PROG = [                                            // I–V–vi–IV in C
+    { root:48, triad:[60,64,67] },  // C
+    { root:43, triad:[59,62,67] },  // G
+    { root:45, triad:[57,60,64] },  // Am
+    { root:41, triad:[57,60,65] },  // F
+];
+const M_ARP = [0,2,1,4, 2,1,2,0];                            // 8 eighth-notes, my motif
+function mTriad(triad, idx){ const n = triad.length, oct = Math.floor(idx/n); return triad[((idx%n)+n)%n] + 12*oct; }
+function startMusic(){
+    if (!audioCtx || musicOn) return;
+    musicOn = true; musicStep = 0; musicNextTime = audioCtx.currentTime + 0.12;
+    musicBus.gain.cancelScheduledValues(audioCtx.currentTime);
+    musicBus.gain.setValueAtTime(Math.max(0.0001, musicBus.gain.value), audioCtx.currentTime);
+    musicBus.gain.linearRampToValueAtTime(0.5, audioCtx.currentTime + 1.6);
+    musicTimer = setInterval(scheduleMusic, 25);
+}
+function stopMusic(){
+    if (!audioCtx) return;
+    musicOn = false;
+    if (musicTimer){ clearInterval(musicTimer); musicTimer = null; }
+    musicBus.gain.cancelScheduledValues(audioCtx.currentTime);
+    musicBus.gain.setValueAtTime(musicBus.gain.value, audioCtx.currentTime);
+    musicBus.gain.linearRampToValueAtTime(0.0, audioCtx.currentTime + 0.4);
+}
+function scheduleMusic(){
+    if (!audioCtx || !musicOn) return;
+    while (musicNextTime < audioCtx.currentTime + 0.12){
+        playMusicStep(musicStep, musicNextTime);
+        musicNextTime += M_STEP;
+        musicStep = (musicStep + 1) % 64;                   // 4 bars × 16 steps
+    }
+}
+function playMusicStep(step, t){
+    const chord = M_PROG[Math.floor(step/16)], s = step % 16;
+    if (s === 0 || s === 8)                                 // soft bass on beats 1 & 3
+        voice({ type:'sine', t, f0:NOTE(chord.root), dur:0.55, g:0.10, cut:520, a:0.012, bus:musicBus });
+    if (s === 0)                                            // pad chord, slow attack
+        chord.triad.forEach((m,i)=> voice({ type:'triangle', t, f0:NOTE(m), dur:M_BEAT*3.4, g:0.026, cut:1500, a:0.2, detune:(i-1)*6, bus:musicBus }));
+    if (s % 2 === 0){                                       // sparkly arpeggio (8ths, octave up)
+        const ai = M_ARP[s/2];
+        if (ai >= 0) voice({ type:'triangle', t, f0:NOTE(mTriad(chord.triad, ai) + 12), dur:0.26, g:0.04, cut:2700, a:0.004, bus:musicBus });
+    }
+    if (s === 0 || s === 8){                                // soft kick
+        const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+        o.type='sine'; o.frequency.setValueAtTime(115,t); o.frequency.exponentialRampToValueAtTime(45,t+0.12);
+        g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.09,t+0.005); g.gain.exponentialRampToValueAtTime(0.0001,t+0.16);
+        o.connect(g); g.connect(musicBus); o.start(t); o.stop(t+0.18);
+    }
+    if (s === 4 || s === 12){                               // soft hat (filtered noise)
+        const dur=0.05, n=Math.floor(audioCtx.sampleRate*dur), buf=audioCtx.createBuffer(1,n,audioCtx.sampleRate), d=buf.getChannelData(0);
+        for(let i=0;i<n;i++) d[i]=Math.random()*2-1;
+        const src=audioCtx.createBufferSource(); src.buffer=buf;
+        const hp=audioCtx.createBiquadFilter(); hp.type='highpass'; hp.frequency.value=7500;
+        const g=audioCtx.createGain(); g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.018,t+0.004); g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+        src.connect(hp); hp.connect(g); g.connect(musicBus); src.start(t); src.stop(t+dur);
+    }
+}
+
+/* ============================================================================
+   LIVE PIXEL HUD (left faction rows, counts, bottom status bar)
+   ============================================================================ */
+const _hudEls = {};
+function hudEl(id){ if (!(id in _hudEls)) _hudEls[id] = document.getElementById(id); return _hudEls[id]; }
+const _hudPrev = {};
+function setTick(id, val){
+    const el = hudEl(id); if (!el) return;
+    if (_hudPrev[id] !== val){ el.classList.add('tick'); el._tickAt = gameFrame; _hudPrev[id] = val; }
+    else if (el._tickAt !== undefined && gameFrame - el._tickAt > 6){ el.classList.remove('tick'); el._tickAt = undefined; }
+    el.textContent = val;
+}
+function updatePixelHUD(){
+    const cnt = { cooperator:0, competitor:0, defector:0, predator:0, enforcer:0 };
+    const mass = { cooperator:0, competitor:0, defector:0, predator:0 };
+    for (const a of agents){ if (!a || !(a.type in cnt)) continue; cnt[a.type]++; if (a.type in mass) mass[a.type]+=a.mass; }
+    setTick('count-cooperator', cnt.cooperator);
+    setTick('count-competitor', cnt.competitor);
+    setTick('count-defector', cnt.defector);
+    setTick('count-predator', cnt.predator);
+    setTick('count-enforcer', cnt.enforcer);
+    const maxM = Math.max(1, mass.cooperator, mass.competitor, mass.defector, mass.predator);
+    const setW = (id,v) => { const el = hudEl(id); if (el) el.style.width = Math.round((v/maxM)*100) + '%'; };
+    setW('facbar-coop', mass.cooperator); setW('facbar-comp', mass.competitor);
+    setW('facbar-def', mass.defector); setW('facbar-pred', mass.predator);
+    const enfEl = hudEl('facbar-enf'); if (enfEl) enfEl.style.width = Math.min(100, cnt.enforcer*12) + '%';
+}
+
+/* ============================================================================
+   MAIN DRAW PIPELINE
+   ============================================================================ */
+function draw() {
+    effectEngine.update();                 // advance FX once per render (speed-independent)
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    drawGroundTexture();                    // 1. grass + roads + props (cached)
+    drawNodeTerritories();                  // 2. territory circles
+    drawNodesPix();                         // 3. node sprites (+ cull dead nodes)
+    drawResourcesPix();                     // 4. bobbing food
+    effectEngine.drawUnder(ctx);            // 5. underlayer FX (blood stains)
+    drawAgents();                           // 6. agent sprites
+    drawJailCorner();                       // 7. jail overlay
+    effectEngine.drawOver(ctx);             // 8. overlayer FX (bust/zap/raid/etc)
+    floatingTexts.forEach(t => { if (t) t.draw(); }); // 9. floating text
+    drawCanvasHUD();                        // 10. mini status bar
+
+    updatePixelHUD();                       // DOM HUD (counts, bars, bottom bar)
 } // End draw
 
 
@@ -2212,6 +2858,7 @@ function gameLoop() {
     // --- High-Speed Simulation Loop ---
     // Run core updates multiple times based on speed multiplier
     const speed = Math.max(1, currentSpeedMultiplier); // Ensure speed is at least 1
+    fxFrameKeys.clear(); // v0.4: reset per-render FX throttle before this frame's physics ticks
     for (let i = 0; i < speed; i++) {
         gameFrame++; // Increment frame counter
         spawnResources(); // Chance to spawn normal resources
@@ -2255,7 +2902,7 @@ function stopGame() {
         cancelAnimationFrame(animationFrameId); // Stop the loop
     }
      if(startBtn) {
-        startBtn.textContent = 'Start Simulation';
+        startBtn.textContent = 'Start';
         startBtn.disabled = false;
     }
      if(resetBtn) resetBtn.disabled = false;
@@ -2270,7 +2917,7 @@ function resetGame() {
     ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear canvas
     draw(); // Draw initial state
      if(startBtn) {
-        startBtn.textContent = 'Start Simulation';
+        startBtn.textContent = 'Start';
         startBtn.disabled = false;
     }
 } // End resetGame
@@ -2353,5 +3000,339 @@ updateConfigFromUI(); // Read initial slider values into GLOBAL_CONFIG
 initializeSimulation(); // Set up initial simulation state based on config
 draw(); // Draw the initial state
 setSpeed(1); // Set initial speed display
+
+/* ============================================================================
+   v0.4 UI WIRING — console tabs, mute, faction icons, boot sequence
+   ============================================================================ */
+
+// Command-console tab switching
+document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tabpage').forEach(p => p.classList.remove('active'));
+        tab.classList.add('active');
+        const pg = document.querySelector('.tabpage[data-page="' + tab.dataset.tab + '"]');
+        if (pg) pg.classList.add('active');
+    });
+});
+
+// Mute toggle
+const muteBtn = document.getElementById('mute-btn');
+if (muteBtn) muteBtn.addEventListener('click', () => {
+    soundOn = !soundOn;
+    muteBtn.textContent = 'SOUND: ' + (soundOn ? 'ON' : 'OFF');
+    muteBtn.classList.toggle('off', !soundOn);
+    if (soundOn){ initAudio(); startMusic(); }
+    else stopMusic();
+});
+
+// Draw faction mini-icons into the intel panel + legend canvases
+document.querySelectorAll('canvas.ico').forEach(ic => {
+    const def = SPR[ic.dataset.type]; if (!def) return;
+    const c = ic.getContext('2d'); c.imageSmoothingEnabled = false;
+    const grid = def.frames[0], sc = 3, w = grid[0].length, h = grid.length;
+    const ox = Math.round((ic.width - w*sc)/2), oy = Math.round((ic.height - h*sc)/2);
+    for (let r = 0; r < h; r++) for (let col = 0; col < w; col++){
+        const idx = grid[r][col]; if (!idx) continue;
+        c.fillStyle = def.pal[idx] || '#f0f';
+        c.fillRect(ox + col*sc, oy + r*sc, sc, sc);
+    }
+});
+
+// Hover label: show the agent type under the cursor
+let hoverLabel = null;
+canvas.addEventListener('mousemove', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const my = (e.clientY - rect.top) * (canvas.height / rect.height);
+    let best = null, bd = 18;
+    for (const a of agents){ if (!a) continue; const d = distance(mx, my, a.x, a.y); if (d < bd){ bd = d; best = a; } }
+    hoverLabel = best ? { x: best.x, y: best.y, t: best.type.toUpperCase() } : null;
+});
+const _origDraw = draw;
+draw = function(){
+    _origDraw();
+    if (hoverLabel){
+        ctx.font = "6px 'Press Start 2P', monospace"; ctx.textAlign = 'center';
+        ctx.fillStyle = '#000'; ctx.fillRect(hoverLabel.x - 28, hoverLabel.y - 26, 56, 9);
+        ctx.fillStyle = COL.green; ctx.fillText(hoverLabel.t, hoverLabel.x, hoverLabel.y - 19);
+    }
+};
+
+/* ============================================================================
+   SPLASH SCREEN — full-bleed key-art (assets/socsim-splash.png) with the
+   SOCSIM_SPLASH overlay (splash-render.js) drawing animated FX on top.
+   Breathing zoom is pure CSS on #splash-group; this only drives FX + dismiss.
+   ============================================================================ */
+let splashRAF = null;
+function runSplash(){
+    const scr   = document.getElementById('boot-screen');
+    const group = document.getElementById('splash-group');
+    const art   = document.getElementById('splash-art');
+    const cvs   = document.getElementById('splash-canvas');
+    if (!scr || !cvs){ return; }
+    const sizeEl = group || cvs;
+    let dismissed = false;
+
+    function dismiss(){
+        if (dismissed) return; dismissed = true;
+        if (splashRAF) cancelAnimationFrame(splashRAF);
+        initAudio();
+        scr.classList.add('off');
+        setTimeout(() => { scr.style.display = 'none'; }, 480);
+        window.removeEventListener('keydown', dismiss);
+        window.removeEventListener('mousedown', dismiss);
+        window.removeEventListener('resize', fit);
+        setSpeed(1); startGame();   // autoplay from the splash, at 1x
+    }
+    function fit(){
+        const w = Math.max(2, Math.round(sizeEl.clientWidth));
+        const h = Math.max(2, Math.round(sizeEl.clientHeight));
+        if (cvs.width !== w || cvs.height !== h){ cvs.width = w; cvs.height = h; }
+    }
+
+    window.addEventListener('keydown', dismiss);
+    window.addEventListener('mousedown', dismiss);
+    window.addEventListener('resize', fit);
+
+    const c = cvs.getContext('2d');
+    if (art){
+        if (art.complete && art.naturalWidth) fit(); else art.addEventListener('load', fit, { once:true });
+        if (art.decode) art.decode().then(fit).catch(() => {});
+    }
+    fit();
+
+    let t = 0;
+    (function loop(){
+        if (dismissed) return;
+        if (window.SOCSIM_SPLASH && SOCSIM_SPLASH.setLayout)
+            SOCSIM_SPLASH.setLayout(window.matchMedia('(max-width:1080px)').matches ? 'portrait' : 'landscape');
+        fit();
+        if (window.SOCSIM_SPLASH) SOCSIM_SPLASH.drawOverlay(c, t++);
+        splashRAF = requestAnimationFrame(loop);
+    })();
+}
+runSplash();
+
+/* ============================================================================
+   SOCIOLOGY FILES — rotating scholar cards w/ pixel-art professor headshots
+   ============================================================================ */
+const PROF_SKIN = ['#f0c8a0','#e8b890','#d8a070','#c89060'];
+function drawProfessor(c, f){
+    c.clearRect(0,0,44,44); c.imageSmoothingEnabled=false;
+    const P=(x,y,w,h,col)=>{ c.fillStyle=col; c.fillRect(x,y,w,h); };
+    const skin=f.skin, hair=f.hair||'#3a3a3a';
+    // shoulders / jacket
+    P(8,38,28,6,f.jacket); P(6,40,32,4,f.jacket);
+    P(18,38,8,6,'#e0e0e0');                 // shirt
+    if (f.bowtie){ P(20,39,4,3,f.accent); P(19,40,1,1,f.accent); P(24,40,1,1,f.accent); }
+    else { P(19,38,2,4,'#cfcfcf'); P(23,38,2,4,'#cfcfcf'); } // collar
+    // neck + head
+    P(19,33,6,5,skin);
+    P(13,14,18,21,skin);                    // face
+    P(12,18,1,12,skin); P(31,18,1,12,skin); // cheeks
+    P(12,22,1,3,skin); P(31,22,1,3,skin);   // ears
+    // hair styles
+    if (f.style==='bald'){ P(15,12,14,3,skin); P(14,14,2,3,'#caa'); }
+    else if (f.style==='tonsure'){ P(12,20,2,8,hair); P(30,20,2,8,hair); P(13,13,18,2,hair); }
+    else if (f.style==='combover'){ P(13,11,18,5,hair); P(13,11,12,7,hair); }
+    else if (f.style==='slick'){ P(13,11,18,5,hair); P(13,11,18,2,'#000'); }
+    else if (f.style==='wild'){ P(11,8,22,7,hair); P(8,12,4,8,hair); P(32,12,4,8,hair);
+        P(10,6,3,4,hair); P(31,6,3,4,hair); P(16,5,4,4,hair); P(24,6,4,4,hair); }
+    else { P(13,11,18,6,hair); } // default
+    // eyebrows
+    if (f.brows){ P(15,21,5,2,hair); P(24,21,5,2,hair); }
+    // eyes
+    P(16,24,3,3,'#fff'); P(25,24,3,3,'#fff'); P(17,25,1,1,'#000'); P(26,25,1,1,'#000');
+    // eyewear
+    if (f.eyes==='round'){ c.strokeStyle='#222'; c.lineWidth=1;
+        c.strokeRect(15.5,23.5,4,4); c.strokeRect(24.5,23.5,4,4); P(20,25,4,1,'#222'); }
+    else if (f.eyes==='shades'){ P(15,23,5,4,'#0a0a0a'); P(24,23,5,4,'#0a0a0a'); P(20,24,4,1,'#0a0a0a');
+        P(16,24,1,1,'#3aa'); }
+    else if (f.eyes==='monocle'){ c.strokeStyle='#ffd23a'; c.lineWidth=1; c.strokeRect(24.5,23.5,5,5);
+        P(29,28,1,6,'#ffd23a'); }
+    else if (f.eyes==='eyepatch'){ P(15,22,6,6,'#0a0a0a'); P(13,20,18,1,'#0a0a0a'); }
+    // nose
+    P(22,28,2,3,'#caa080');
+    // facial hair
+    if (f.beard==='full'){ P(13,30,18,7,hair); P(12,28,2,6,hair); P(30,28,2,6,hair); P(15,33,14,4,hair); P(20,31,4,3,skin); }
+    else if (f.beard==='mustache'){ P(16,30,12,3,hair); P(15,31,2,2,hair); P(27,31,2,2,hair); }
+    else if (f.beard==='goatee'){ P(18,30,8,2,hair); P(20,32,4,5,hair); }
+    else if (f.beard==='stubble'){ for(let i=0;i<18;i++){ const gx=13+(i*7%18), gy=31+((i*5)%5); P(gx,gy,1,1,hair);} }
+}
+const CARDS = [
+ { title:'GOVERNANCE & PUBLIC GOODS', prof:'PROF. BUCHANAN',
+   quote:'Someone has to pay the cops. Tax the rich, fund the badge — congratulations, you just invented the state.',
+   cite:'Public goods · Buchanan & Tullock, 1962',
+   feat:{skin:PROF_SKIN[0], style:'bald', beard:'full', eyes:'round', jacket:'#2d4a7a', accent:'#00ff41', bowtie:true} },
+ { title:'COLLECTIVE ACTION', prof:'PROF. OLSON',
+   quote:'Why build the guild hall if you can freeload off it? Make it a club: pay in, or get bounced.',
+   cite:'Collective action · Olson, 1965',
+   feat:{skin:PROF_SKIN[1], style:'combover', beard:'none', eyes:'round', jacket:'#0e7490', accent:'#00ffff', bowtie:true} },
+ { title:'RECIPROCITY & TRUST', prof:'PROF. AXELROD',
+   quote:'Be kind — but keep receipts. Betray the clan three times and you are dead to them. Forever.',
+   cite:'Reciprocity · Axelrod, 1984',
+   feat:{skin:PROF_SKIN[2], style:'combover', beard:'mustache', eyes:'none', jacket:'#2a6e3a', accent:'#00ff41'} },
+ { title:'CRIME & DETERRENCE', prof:'PROF. BECKER',
+   quote:'Crooks run the numbers too: loot versus the odds of jail. Want less crime? Make the math worse.',
+   cite:'Economics of crime · Becker, 1968',
+   feat:{skin:PROF_SKIN[0], style:'slick', beard:'none', eyes:'monocle', jacket:'#7a5a2a', accent:'#ffb627', bowtie:true} },
+ { title:'CORRUPTION (PRINCIPAL-AGENT)', prof:'PROF. JENSEN',
+   quote:'Who polices the police? A bribe clears — right up until another badge happens to be watching.',
+   cite:'Principal-agent · Jensen & Meckling, 1976',
+   feat:{skin:PROF_SKIN[1], style:'slick', beard:'goatee', eyes:'shades', jacket:'#3a3a4a', accent:'#9b59ff'} },
+ { title:'INEQUALITY & POWER LAWS', prof:'PROF. PARETO',
+   quote:'Eighty percent of the mass piles onto twenty percent of the bodies. The map was never going to be fair.',
+   cite:'Inequality · Pareto, 1896',
+   feat:{skin:PROF_SKIN[2], style:'combover', beard:'full', eyes:'round', brows:true, jacket:'#5a2a7a', accent:'#9b59ff'} },
+ { title:'BIOECONOMICS & METABOLISM', prof:'PROF. KLEIBER',
+   quote:'Big bodies burn big. Stop eating and even your fattest tycoon withers away to nothing.',
+   cite:'Metabolic scaling · Kleiber’s Law',
+   feat:{skin:PROF_SKIN[0], style:'wild', beard:'mustache', eyes:'none', brows:true, jacket:'#8b0000', accent:'#ff2d2d'} },
+ { title:'ILLICIT SANCTUARIES', prof:'PROF. GAMBETTA',
+   quote:'Outlaws need real estate too. The hideout is a startup — booming, until the raid van pulls up.',
+   cite:'Illicit order · Gambetta, 1993',
+   feat:{skin:PROF_SKIN[3], style:'combover', beard:'stubble', eyes:'eyepatch', jacket:'#6a1414', accent:'#ff2d2d'} },
+];
+function setupCards(){
+    const portrait = document.getElementById('card-portrait');
+    const titleEl = document.getElementById('card-title');
+    const quoteEl = document.getElementById('card-quote');
+    const citeEl  = document.getElementById('card-cite');
+    const profEl  = document.getElementById('card-prof');
+    const dotsEl  = document.getElementById('card-dots');
+    if (!portrait || !dotsEl) return;
+    const pctx = portrait.getContext('2d');
+    // quote = typed (visible) + cursor + rest (invisible, but reserves the full
+    // layout from the start so nothing reflows while it types)
+    quoteEl.innerHTML = '<span id="card-quote-text"></span><span id="card-cursor">_</span><span id="card-quote-rest"></span>';
+    const quoteText = document.getElementById('card-quote-text');
+    const cursor = document.getElementById('card-cursor');
+    const quoteRest = document.getElementById('card-quote-rest');
+
+    let idx = -1, dwellTimer = null, typeTimer = null;
+    const DWELL = 7500, TYPE_MS = 26;
+
+    dotsEl.innerHTML = '';
+    CARDS.forEach((_, i) => { const d = document.createElement('i');
+        d.addEventListener('click', () => show(i)); dotsEl.appendChild(d); });
+
+    // Reserve the TALLEST card's text height so the panel never resizes between
+    // cards (no magic numbers — measured from the real data, re-run on resize so
+    // it adapts to width/font). card height = max(portrait, tallest text) = stable.
+    const textEl = quoteEl.parentElement;            // .card-text
+    function reserveTallest(){
+        const sTitle = titleEl.textContent, sCite = citeEl.textContent,
+              sText = quoteText.textContent, sRest = quoteRest.textContent,
+              sCur = cursor.style.display;
+        cursor.style.display = 'none';
+        textEl.style.minHeight = '0px';
+        let max = 0;
+        CARDS.forEach(c => {
+            titleEl.textContent = c.title;
+            quoteText.textContent = '';
+            quoteRest.textContent = '“' + c.quote + '”';
+            citeEl.textContent = '— ' + c.cite;
+            if (textEl.offsetHeight > max) max = textEl.offsetHeight;
+        });
+        textEl.style.minHeight = max + 'px';
+        titleEl.textContent = sTitle; citeEl.textContent = sCite;
+        quoteText.textContent = sText; quoteRest.textContent = sRest;
+        cursor.style.display = sCur;
+    }
+    reserveTallest();
+    // re-measure once the pixel webfont loads — first paint uses fallback metrics
+    // and would reserve a too-short height (the mobile per-card jump).
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(reserveTallest);
+    let rT; addEventListener('resize', () => { clearTimeout(rT); rT = setTimeout(reserveTallest, 150); });
+
+    function show(i){
+        clearTimeout(dwellTimer); clearTimeout(typeTimer);
+        idx = i;
+        const card = CARDS[i];
+        drawProfessor(pctx, card.feat);
+        titleEl.textContent = card.title; titleEl.style.color = card.feat.accent;
+        profEl.textContent = card.prof; profEl.style.color = card.feat.accent;
+        citeEl.textContent = '— ' + card.cite;         // present from the start (no late reflow)
+        [...dotsEl.children].forEach((d,k) => d.classList.toggle('on', k===i));
+
+        // --- typewriter the quote (full text is always laid out via the rest span) ---
+        const full = '“' + card.quote + '”';
+        let pos = 0;
+        quoteText.textContent = '';
+        quoteRest.textContent = full;                  // reserves the full quote's space immediately
+        cursor.style.display = 'inline';
+        cursor.classList.add('blink');
+        function step(){
+            quoteText.textContent = full.slice(0, pos);
+            quoteRest.textContent = full.slice(pos);
+            if (pos < full.length){
+                if (full[pos] !== ' ') playType();   // subtle typewriter tick per character
+                pos++; typeTimer = setTimeout(step, TYPE_MS);
+            }
+            else {
+                cursor.classList.remove('blink'); cursor.style.display = 'none';
+                quoteRest.textContent = '';
+                // dwell 7.5s AFTER typing completes, then advance
+                dwellTimer = setTimeout(() => show((idx + 1) % CARDS.length), DWELL);
+            }
+        }
+        step();
+    }
+    show(0);
+}
+setupCards();
+
+/* author contact card — gamey pixel-spark burst on hover */
+function setupAuthorCard(){
+    const card = document.getElementById('author-card');
+    const cvs = card && card.querySelector('.ac-sparks');
+    if (!card || !cvs) return;
+    const ctx = cvs.getContext('2d');
+    const PAD = 18; // matches .ac-sparks inset:-18px
+    const COLORS = ['#00ff41','#00ffff','#ffb627','#ff2d2d','#9b59ff','#ffffff'];
+    let parts = [], raf = null, hovering = false;
+    function fit(){
+        const r = card.getBoundingClientRect();
+        const w = Math.max(2, Math.round(r.width)  + PAD*2);
+        const h = Math.max(2, Math.round(r.height) + PAD*2);
+        if (cvs.width !== w || cvs.height !== h){ cvs.width = w; cvs.height = h; }
+    }
+    function spawn(n){
+        const W = cvs.width, H = cvs.height, ix0 = PAD, iy0 = PAD, ix1 = W - PAD, iy1 = H - PAD;
+        for (let i = 0; i < n; i++){
+            // emit from a point on the card's border
+            let x, y, nx, ny;
+            if (Math.random() < (ix1-ix0)/((ix1-ix0)+(iy1-iy0))){
+                x = ix0 + Math.random()*(ix1-ix0); y = Math.random()<0.5 ? iy0 : iy1; ny = y===iy0 ? -1 : 1; nx = (Math.random()-0.5);
+            } else {
+                y = iy0 + Math.random()*(iy1-iy0); x = Math.random()<0.5 ? ix0 : ix1; nx = x===ix0 ? -1 : 1; ny = (Math.random()-0.5);
+            }
+            const sp = 0.8 + Math.random()*2.4;
+            parts.push({ x, y, vx:nx*sp + (Math.random()-0.5), vy:ny*sp - 0.6 + (Math.random()-0.5),
+                         life:14 + (Math.random()*22|0), col:COLORS[(Math.random()*COLORS.length)|0], s:1 + (Math.random()*2|0) });
+        }
+    }
+    function loop(){
+        const W = cvs.width, H = cvs.height;
+        ctx.clearRect(0, 0, W, H);
+        if (hovering && Math.random() < 0.85) spawn(2);
+        for (let i = parts.length - 1; i >= 0; i--){
+            const p = parts[i];
+            p.x += p.vx; p.y += p.vy; p.vy += 0.14; p.life--;
+            if (p.life <= 0){ parts.splice(i, 1); continue; }
+            ctx.globalAlpha = Math.min(1, p.life/12);
+            ctx.fillStyle = p.col;
+            ctx.fillRect(p.x|0, p.y|0, p.s, p.s);
+        }
+        ctx.globalAlpha = 1;
+        if (hovering || parts.length){ raf = requestAnimationFrame(loop); }
+        else { raf = null; ctx.clearRect(0,0,W,H); }
+    }
+    window.addEventListener('resize', fit);
+    card.addEventListener('mouseenter', () => { hovering = true; fit(); spawn(16); playPixelSound('zap'); if (!raf) loop(); });
+    card.addEventListener('mouseleave', () => { hovering = false; });
+}
+setupAuthorCard();
 
 })(); // NEW: End of IIFE wrapper

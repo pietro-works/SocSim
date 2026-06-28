@@ -1,34 +1,372 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
-body {
-    font-family: 'Inter', sans-serif;
-    background-color: #f7f7f7;
-    display: flex;
-    justify-content: center;
-    align-items: flex-start;
-    min-height: 100vh;
-    padding: 20px;
+/* ============================================================
+   SOCSIM v0.4 — RETRO PIXEL-ART STYLESHEET
+   "booting a SEGA cartridge"  — hand-rolled CRT skin, no Tailwind
+   Single-viewport dashboard: everything fits in 100vh, no scroll.
+   ============================================================ */
+
+:root{
+  --col-black:#0a0a0a;
+  --col-dark:#1a1a2e;
+  --col-panel:#16213e;
+  --col-border:#0f3460;
+  --col-steel:#2d4a7a;
+  --col-dim:#4a6fa5;
+  --col-white:#e0e0e0;
+  --col-bright:#ffffff;
+  --col-green:#00ff41;
+  --col-green-dim:#007a1f;
+  --col-amber:#ffb627;
+  --col-red:#ff2d2d;
+  --col-red-dim:#8b0000;
+  --col-blue:#4169e1;
+  --col-blue-bright:#60a5fa;
+  --col-cyan:#00ffff;
+  --col-purple:#9b59ff;
+  --col-orange:#ff8c00;
+  --col-gray:#555577;
 }
-canvas {
-    /* Base styling for the simulation canvas */
-    border: 3px solid #333;
-    background-color: #e0f2f7; /* Light cyan background */
-    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.15);
-    border-radius: 12px;
+
+*{ box-sizing:border-box; margin:0; padding:0; }
+
+html,body{
+  height:100%; overflow:hidden;          /* desktop: fixed dashboard. mobile override below restores scroll */
+  overscroll-behavior:none;              /* no rubber-band / scroll-chaining bounce */
+  background:#0b0a18;                     /* dark violet night — echoes the splash sky */
+  color:var(--col-green);
+  font-family:'Press Start 2P', monospace;
+  font-size:8px; line-height:1.5;
+  -webkit-font-smoothing:none;
+  image-rendering:pixelated;
 }
-.info-card {
-    /* Styling for all status and control panels */
-    background-color: white;
-    padding: 16px;
-    border-radius: 8px;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+
+body::after{
+  content:""; position:fixed; inset:0; pointer-events:none; z-index:9000;
+  background:radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.55) 100%);
 }
-.speed-btn {
-    /* Styling for the speed control buttons */
-    flex-grow: 1;
-    font-size: 0.85rem;
+#scanlines{
+  position:fixed; inset:0; pointer-events:none; z-index:10001; /* above the splash/boot overlay too */
+  background:repeating-linear-gradient(
+    0deg, transparent, transparent 2px,
+    rgba(0,0,0,0.08) 2px, rgba(0,0,0,0.08) 4px);
 }
-.speed-btn:disabled {
-    /* Styling for disabled buttons */
-    opacity: 0.5;
-    cursor: not-allowed;
+
+/* ============================================================
+   BOOT / SPLASH SCREEN
+   ============================================================ */
+#boot-screen{
+  position:fixed; inset:0; z-index:10000; background:#05060f;
+  overflow:clip;
+  transition:opacity .45s ease;
+}
+#boot-screen.off{ opacity:0; }
+/* full-bleed: top edge glued to the viewport top; cover-extends to sides/bottom.
+   the art FRAME is sized to cover at the art's own aspect, so the FX canvas
+   (which fills it) stays pixel-aligned with the artwork. */
+#splash-stage{ position:absolute; inset:0; display:flex; justify-content:center; align-items:flex-start; }
+#splash-group{
+  flex:0 0 auto;
+  width:max(100vw, calc(100vh * 1.791667));   /* 1376/768 — cover the viewport */
+  aspect-ratio:1376 / 768;                      /* height follows; always >= 100vh */
+  position:relative; overflow:clip;
+  transform-origin:top center; will-change:transform; /* breathe keeps the top pinned */
+  animation:socsim-breathe 16s ease-in-out infinite;
+}
+#splash-art, #splash-art-portrait, #splash-canvas{ position:absolute; inset:0; width:100%; height:100%; display:block; }
+#splash-art, #splash-art-portrait{ object-fit:cover; }
+#splash-art-portrait{ display:none; }   /* portrait shown only on mobile/vertical */
+#splash-canvas{ pointer-events:none; }
+@keyframes socsim-breathe{ 0%,100%{ transform:scale(1.0); } 50%{ transform:scale(1.035); } }
+#boot-prompt{
+  position:absolute; left:0; right:0; bottom:calc(4vh + 50px); z-index:2;
+  text-align:center; white-space:nowrap;            /* always one line */
+  font-size:min(20px, 3.05vw);                      /* ~10% bigger; only shrinks to stay one line on small viewports */
+  color:#ffd23a;
+  text-shadow:0 0 4px #05060f, 0 0 14px rgba(255,200,60,.95);
+  animation:blink 0.9s steps(1) infinite;
+}
+@keyframes blink{ 50%{ opacity:0; } }
+/* mobile / vertical viewports use the portrait splash (its own aspect, top-glued) */
+@media (max-width:1080px){
+  #splash-art{ display:none; }
+  #splash-art-portrait{ display:block; }
+  #splash-group{ aspect-ratio:768 / 1376; width:max(100vw, calc(100vh * 0.558140));
+    animation:none; }   /* no breathing zoom on the mobile/portrait splash */
+}
+
+/* ============================================================
+   APP SHELL — fixed to viewport height
+   ============================================================ */
+#app{ height:100vh; display:flex; flex-direction:column; padding:8px;
+  overflow:clip; /* clip below-fold spark bleed so <body> isn't a scroll-latch */ }
+
+/* logo "notch" — a square panel hanging from the top-center of the game board,
+   styled exactly like the other panels (dot-grid, steel border + inset, rivets) */
+#logo-notch{
+  position:absolute; top:0px; left:50%; transform:translateX(-50%); z-index:6;
+  padding:10px 15px 10px; pointer-events:none;
+  background-color:var(--col-panel);
+  background-image:radial-gradient(circle, var(--col-steel) 1px, transparent 1px);
+  background-size:8px 8px;
+  border:3px solid var(--col-border); border-top:none;
+  box-shadow:inset 0 0 0 1px var(--col-steel), 0 2px 10px rgba(0,0,0,.45), 0 0 12px rgba(0,255,65,.12);
+}
+#logo-notch img{ display:block; width:122px; height:auto; image-rendering:auto;
+  filter:drop-shadow(0 0 5px rgba(120,235,255,.3)); }
+
+/* NARROW SYMMETRIC SIDE PANELS + BIG HERO CANVAS */
+#layout{
+  position:relative;
+  flex:1 1 auto; min-height:0;
+  display:grid; grid-template-columns:300px minmax(0,1fr) 300px;
+  gap:10px; align-items:stretch;
+}
+/* only the three top-level columns fill the row height (not nested panels) */
+#intel-panel, #config-panel{ height:100%; }
+
+/* paired mini-stat columns to keep panels short */
+.twocol{ display:grid; grid-template-columns:1fr 1fr; gap:0 12px; }
+.twocol .sect{ margin-top:14px; }
+
+/* ============================================================
+   PANELS — steel & rivets
+   ============================================================ */
+.panel{
+  position:relative; overflow:clip;   /* clip (not a scroll container) so the wheel can't latch onto it */
+  background-color:var(--col-panel);
+  background-image:radial-gradient(circle, var(--col-steel) 1px, transparent 1px);
+  background-size:8px 8px;
+  border:3px solid var(--col-border);
+  box-shadow:inset 0 0 0 1px var(--col-steel), 0 0 12px rgba(0,255,65,.12);
+  padding:10px 12px;
+}
+.rivet{ position:absolute; width:6px; height:6px; border-radius:50%;
+  background:var(--col-steel); box-shadow:0 0 2px var(--col-black); }
+.rv-tl{ top:4px; left:4px; } .rv-tr{ top:4px; right:4px; }
+.rv-bl{ bottom:4px; left:4px; } .rv-br{ bottom:4px; right:4px; }
+
+.sect{
+  color:var(--col-green); font-size:8px; text-transform:uppercase;
+  border-left:3px solid var(--col-green);
+  border-bottom:1px solid var(--col-green-dim);
+  padding:3px 0 3px 6px; margin:16px 0 9px;
+  text-shadow:0 0 4px rgba(0,255,65,.4);
+}
+/* first section in the intel panel hugs the top */
+#intel-panel > .sect:first-of-type{ margin-top:2px; }
+.muted{ color:var(--col-gray); }
+
+/* ---------- faction rows ---------- */
+.faction-row{
+  display:grid;
+  grid-template-columns:16px 1fr auto;
+  grid-template-areas:"ico name count" "ico bar mass";
+  gap:3px 4px; align-items:center; margin-bottom:9px;
+}
+.faction-row .ico{ grid-area:ico; width:16px; height:18px; image-rendering:pixelated; }
+.fac-name{ grid-area:name; font-size:6px; }
+.fac-count{ grid-area:count; font-size:7px; color:var(--col-bright); text-align:right; }
+.fac-mass{ grid-area:mass; font-size:6px; color:var(--col-white); text-align:right; }
+.faction-row .massbar{ grid-area:bar; }
+
+.massbar{ position:relative; height:7px; background:var(--col-dark);
+  border:1px solid var(--col-border); overflow:clip; }
+.massbar .fill{ position:absolute; top:0; left:0; height:100%; transition:width .25s steps(8); }
+.massbar::after{ content:""; position:absolute; inset:0; pointer-events:none;
+  background:repeating-linear-gradient(90deg, transparent 0, transparent 3px,
+     var(--col-panel) 3px, var(--col-panel) 4px); }
+.bar-coop{ background:var(--col-green); } .bar-comp{ background:var(--col-orange); }
+.bar-def{ background:var(--col-purple); } .bar-pred{ background:var(--col-red); }
+.bar-enf{ background:var(--col-blue); }
+
+.totalmass{ color:var(--col-amber); font-size:7px; margin-top:9px;
+  border-top:1px solid var(--col-border); padding-top:9px;
+  text-shadow:0 0 4px rgba(255,182,39,.4); }
+
+/* group standings */
+.grp{ display:grid; grid-template-columns:32px 1fr auto; gap:5px; align-items:center; margin-bottom:8px; }
+.grp-lbl{ font-size:6px; } .grp-val{ font-size:6px; color:var(--col-bright); text-align:right; }
+.grp .massbar{ height:8px; }
+.percap{ display:flex; flex-direction:column; gap:4px; margin-top:9px;
+  border-top:1px solid var(--col-border); padding-top:8px; font-size:6px; color:var(--col-dim); }
+.percap b{ color:var(--col-white); }
+
+/* key/value stat rows */
+.kv{ display:flex; justify-content:space-between; align-items:center;
+  font-size:6px; color:var(--col-dim); padding:3px 0; }
+.kv b{ font-size:7px; }
+.v-amber{ color:var(--col-amber); } .v-blue{ color:var(--col-blue-bright); }
+.v-white{ color:var(--col-bright); } .v-cyan{ color:var(--col-cyan); }
+.v-red{ color:var(--col-red); } .v-purple{ color:var(--col-purple); }
+.tick{ color:var(--col-bright) !important; text-shadow:0 0 6px var(--col-bright); }
+
+.c-coop{ color:var(--col-green); } .c-comp{ color:var(--col-orange); }
+.c-def{ color:var(--col-purple); } .c-pred{ color:var(--col-red); }
+.c-enf{ color:var(--col-blue-bright); } .c-cyan{ color:var(--col-cyan); }
+
+.legend{ display:grid; grid-template-columns:1fr 1fr; gap:6px 10px; margin-top:2px; }
+.legend div{ display:flex; align-items:center; gap:4px; font-size:6px; color:var(--col-white); }
+.lg{ width:8px; height:8px; flex:0 0 8px; border:1px solid var(--col-black); }
+.lg.coop{ background:var(--col-green); } .lg.comp{ background:var(--col-orange); }
+.lg.def{ background:var(--col-purple); } .lg.pred{ background:var(--col-red); }
+.lg.enf{ background:var(--col-blue); }
+.lg.node{ background:var(--col-cyan); } .lg.hide{ background:var(--col-red-dim); }
+.lg.grub{ background:var(--col-amber); border-radius:50%; }
+
+/* ============================================================
+   CENTER : CANVAS + STATUS + CARDS (flex, canvas fits remaining)
+   ============================================================ */
+#center{ height:100%; display:flex; flex-direction:column; gap:8px; min-height:0;
+  background:transparent; border:none; box-shadow:none; padding:0; overflow:visible; }
+.canvas-wrap{ flex:1 1 0; min-height:0; min-width:0; display:flex; align-items:center; justify-content:center; padding:6px; }
+#simulationCanvas{
+  max-width:100%; max-height:100%;
+  background:#16271a;
+  border:3px solid var(--col-border);
+  box-shadow:inset 0 0 0 2px var(--col-black), 0 0 18px rgba(0,255,65,.18);
+  image-rendering:pixelated; image-rendering:crisp-edges;
+  cursor:crosshair;
+}
+
+/* ---------- sociology card — compact, photo fills the card, no top waste ---------- */
+.cardpanel{ flex:0 0 auto; padding:8px 12px; }
+.card-body{ display:flex; gap:14px; align-items:stretch; }
+.card-portrait-frame{ position:relative; flex:0 0 auto; line-height:0; }
+#card-portrait{
+  display:block; width:124px; height:124px; image-rendering:pixelated;
+  background:#0d1430; border:3px solid var(--col-steel);
+  box-shadow:0 0 14px rgba(0,255,255,.22);
+}
+.card-prof{
+  position:absolute; left:3px; right:3px; bottom:3px;
+  text-align:center; padding:3px 0; line-height:1.3;
+  background:rgba(8,10,22,.80); color:var(--col-cyan);
+  font-size:7px; letter-spacing:1px; text-shadow:0 0 5px rgba(0,255,255,.5);
+}
+.card-text{ flex:1; min-width:0; display:flex; flex-direction:column; justify-content:flex-start; }
+.card-eyebrow{ display:flex; justify-content:space-between; align-items:center;
+  font-size:6px; color:var(--col-gray); margin-bottom:8px; }
+.card-title{ font-size:11px; line-height:1.5; color:var(--col-amber); margin-bottom:10px;
+  text-shadow:0 0 6px rgba(255,182,39,.5); }
+.card-quote{ font-size:9px; line-height:1.9; color:var(--col-white); margin-bottom:9px; min-height:35px; }
+.card-cite{ font-size:7px; color:var(--col-dim); min-height:9px; }
+#card-cursor{ color:var(--col-green); text-shadow:0 0 5px var(--col-green); }
+#card-cursor.blink{ animation:blink .7s steps(1) infinite; }
+#card-quote-rest{ color:transparent; }   /* invisible, but reserves the untyped quote's layout */
+.card-dots{ display:flex; gap:5px; align-items:center; }
+.card-dots i{ width:7px; height:7px; background:var(--col-steel);
+  border:1px solid var(--col-border); cursor:pointer; }
+.card-dots i.on{ background:var(--col-green); box-shadow:0 0 5px var(--col-green); }
+
+/* ============================================================
+   RIGHT : COMMAND CONSOLE
+   ============================================================ */
+.tabs{ display:flex; gap:5px; margin-bottom:10px; }
+.tab{ flex:1; font-family:inherit; font-size:8px; cursor:pointer;
+  background:var(--col-dark); color:var(--col-dim);
+  border:2px solid var(--col-border); padding:7px 2px; }
+.tab.active{ background:var(--col-green-dim); color:var(--col-bright);
+  border-color:var(--col-green); box-shadow:0 0 8px rgba(0,255,65,.3); }
+.tabpage{ display:none; }
+.tabpage.active{ display:grid; grid-template-columns:repeat(auto-fit, minmax(170px,1fr)); gap:2px 14px; margin-bottom:6px; }
+
+.cfg{ margin-bottom:11px; }
+.cfg label{ display:block; font-size:6px; margin-bottom:5px; color:var(--col-white); }
+.cfg .row{ display:flex; gap:6px; align-items:center; }
+
+input[type=range]{ -webkit-appearance:none; appearance:none;
+  flex:1; height:8px; background:transparent; cursor:pointer; margin:3px 0; }
+input[type=range]::-webkit-slider-runnable-track{ height:4px; background:var(--col-steel); border:1px solid var(--col-border); }
+input[type=range]::-moz-range-track{ height:4px; background:var(--col-steel); border:1px solid var(--col-border); }
+input[type=range]::-webkit-slider-thumb{ -webkit-appearance:none; appearance:none;
+  width:10px; height:15px; margin-top:-6px; background:var(--col-green);
+  border:1px solid var(--col-bright); box-shadow:0 0 4px rgba(0,255,65,.5); }
+input[type=range]::-moz-range-thumb{ width:10px; height:15px; border-radius:0;
+  background:var(--col-green); border:1px solid var(--col-bright); }
+input[type=number]{ width:42px; font-family:inherit; font-size:6px;
+  background:var(--col-black); color:var(--col-green);
+  border:1px solid var(--col-border); padding:3px 2px; text-align:center; }
+input:disabled{ opacity:.45; cursor:not-allowed; }
+
+.speedrow{ display:flex; flex-wrap:wrap; gap:4px; }
+.speed-btn{ flex:1 1 14%; font-family:inherit; font-size:7px; cursor:pointer;
+  background:var(--col-dark); color:var(--col-dim);
+  border:2px solid var(--col-border); padding:7px 2px; }
+.speed-btn:hover{ color:var(--col-white); border-color:var(--col-steel); }
+.speed-btn.active{ background:var(--col-green); color:var(--col-black);
+  border-color:var(--col-bright); box-shadow:0 0 8px rgba(0,255,65,.4); }
+
+.ctrlrow{ display:flex; gap:10px; margin-top:10px; }
+.bigbtn{ flex:1; font-family:inherit; font-size:8px; cursor:pointer; padding:11px 4px;
+  background:var(--col-dark); border:2px solid; }
+.bigbtn.go{ color:var(--col-green); border-color:var(--col-green); }
+.bigbtn.go:hover:not(:disabled){ background:var(--col-green); color:var(--col-black); box-shadow:0 0 12px rgba(0,255,65,.5); }
+.bigbtn.stop{ color:var(--col-red); border-color:var(--col-red); }
+.bigbtn.stop:hover:not(:disabled){ background:var(--col-red); color:var(--col-black); box-shadow:0 0 12px rgba(255,45,45,.5); }
+.bigbtn:disabled{ opacity:.4; cursor:not-allowed; }
+
+.mutebtn{ width:100%; margin-top:0; font-family:inherit; font-size:7px; cursor:pointer;
+  background:var(--col-black); color:var(--col-amber);
+  border:1px solid var(--col-border); padding:6px; }
+.mutebtn.off{ color:var(--col-gray); }
+
+/* author contact card — spans the full width of the command-console column,
+   pinned to its bottom; links to LinkedIn */
+#author-card{
+  position:absolute; right:0; bottom:0; left:auto; width:300px; z-index:9500; /* 300px = the side-column width */
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+  padding:8px 14px; text-decoration:none; cursor:pointer; overflow:visible;
+  background-color:var(--col-panel);
+  background-image:radial-gradient(circle, var(--col-steel) 1px, transparent 1px);
+  background-size:8px 8px;
+  border:3px solid var(--col-border);
+  box-shadow:inset 0 0 0 1px var(--col-steel), 0 0 10px rgba(0,0,0,.4);
+  transition:border-color .12s, box-shadow .12s;
+}
+.ac-left{ display:flex; align-items:center; gap:10px; min-width:0; }
+#author-card:hover{
+  border-color:var(--col-green);
+  box-shadow:inset 0 0 0 1px var(--col-steel), 0 0 16px rgba(0,255,65,.5);
+}
+.ac-portrait{ flex:0 0 auto; line-height:0; }
+.ac-portrait img{ width:60px; height:60px; display:block; image-rendering:pixelated; }
+#author-card:hover .ac-portrait{ animation:ac-jitter .16s steps(2) infinite; }
+@keyframes ac-jitter{ 0%{transform:translate(0,0)} 25%{transform:translate(-1px,1px)} 50%{transform:translate(1px,-1px)} 75%{transform:translate(-1px,-1px)} }
+.ac-info{ display:flex; flex-direction:column; gap:4px; white-space:nowrap; }
+.ac-name{ font-size:11px; color:var(--col-cyan); text-shadow:0 0 6px rgba(120,235,255,.5); letter-spacing:1px; }
+.ac-role{ font-size:6px; color:var(--col-white); }
+.ac-cta{ flex:0 0 auto; font-size:9px; color:var(--col-amber); text-shadow:0 0 6px rgba(255,182,39,.4); white-space:nowrap; }
+#author-card:hover .ac-cta{ color:#fff; text-shadow:0 0 8px rgba(0,255,65,.7); }
+.ac-sparks{ position:absolute; inset:-18px; width:auto; height:auto; pointer-events:none; z-index:4; image-rendering:pixelated; }
+
+/* ============================================================
+   MOBILE / NARROW — stack vertically: game viewport on TOP,
+   panels reorganised BELOW it. Normal document scroll allowed.
+   ============================================================ */
+@media (max-width:1080px), (max-height:620px){
+  /* overflow-x:hidden would force overflow-y to compute to `auto`, making <body> a
+     7px scroll container that latches the touch. clip doesn't infect the y-axis,
+     so y stays `visible` and the WINDOW scrolls the whole document normally. */
+  html,body{ overflow-x:clip; overflow-y:visible; height:auto; }
+  #app{ height:auto; min-height:100vh; overflow:visible; }  /* mobile: never clip — clip ancestor blocks touch-scroll */
+
+  /* game on top (full width), then the two panels SIDE BY SIDE at 50%, equal height */
+  #layout{ display:flex; flex-wrap:wrap; flex-direction:row;
+           gap:10px; min-height:0; align-items:stretch; }
+  #center{ order:-1; flex:0 0 100%; height:auto; display:flex; flex-direction:column; }
+  #intel-panel, #config-panel{ flex:1 1 calc(50% - 5px); min-width:0; height:auto; overflow:visible; }
+  .panel{ height:auto; overflow:visible; }
+  .canvas-wrap{ flex:0 0 auto; display:block; padding:6px; }
+  #simulationCanvas{ width:100%; height:auto; max-width:100%; max-height:none; }
+
+  /* sliders go single-column so they fit the narrow 50%-width console (no 170px min) */
+  .tabpage.active{ grid-template-columns:1fr; }
+  .cfg, .cfg .row{ min-width:0; }            /* let grid item + flex row shrink */
+  .cfg input[type=range]{ min-width:0; }     /* range inputs must be allowed to shrink */
+
+  /* avatar: own row, centered, below both panels (relative so z-index still lifts it above the vignette) */
+  #author-card{ position:relative; flex:1 1 100%; width:auto; margin:12px 0 6px; } /* full width below the panels */
+}
+@media (max-width:560px){
+  .twocol{ grid-template-columns:1fr; }   /* single column on small phones */
+  .legend{ grid-template-columns:1fr; }
 }
