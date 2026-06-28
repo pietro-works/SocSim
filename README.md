@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/readme/hero.png" alt="SOCSIM key art" width="840">
+<img src="assets/readme/hero.gif" alt="SOCSIM title screen" width="840">
 
 # SOCSIM
 
